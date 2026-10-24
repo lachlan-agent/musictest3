@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Music Editor</title>
+    <meta name="description" content="Write music programatically with JS and VexFlow. WIP." />
+    <meta name="theme-color" content="#241814" />
+    <script>
+      // iOS Safari zooms into any text field under 16px on focus and stays
+      // zoomed. `maximum-scale=1` stops that; iOS still allows pinch-zoom.
+      if (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) {
+        var viewport = document.querySelector('meta[name="viewport"]');
+        viewport.content += ", maximum-scale=1";
+      }
+    </script>
+    <script>
+      // Offline support; sw.js is generated at deploy time by the sites repo.
+      if ("serviceWorker" in navigator && !location.port) {
+        addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+      }
+    </script>
+    <script>
+      // Applied before first paint so the page never flashes the wrong theme.
+      // Mirrors `resolveTheme` in theme.ts; kept tiny and dependency-free.
+      try {
+        var stored = JSON.parse(localStorage.getItem("musictest3.settings.v1") || "{}");
+        var preference = stored.theme || "system";
+        document.documentElement.dataset.theme =
+          preference === "system"
+            ? window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? stored.darkTheme || "ember"
+              : stored.lightTheme || "vellum"
+            : preference;
+      } catch (error) {
+        document.documentElement.dataset.theme = "ember";
+      }
+    </script>
+  </head>
+  <body>
+    <header class="toolbar">
+      <span class="wordmark">musicTest3</span>
+
+      <div class="group">
+        <button id="play-toggle" class="btn btn-primary btn-play" type="button" title="Play / stop (Ctrl/⌘ + Shift + Enter)">
+          <span class="play-glyph" aria-hidden="true">▶</span><span class="play-label">Play</span>
+        </button>
+        <button id="run" class="btn" type="button" title="Redraw the score (Ctrl/⌘ + Enter)" hidden>Run</button>
+      </div>
+
+      <button
+        id="scores-toggle"
+        class="btn btn-scores"
+        type="button"
+        data-scores-toggle
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        title="Scores: save, open, export (Ctrl/⌘ + S saves)"
+      >
+        <span id="scores-name">Untitled</span><span class="caret" aria-hidden="true">▾</span>
+      </button>
+
+      <div class="spacer"></div>
+
+      <button id="new-window" class="btn" type="button" title="Open another window: score, console or reference (Alt + W)">Window</button>
+
+      <button
+        id="settings-toggle"
+        class="btn"
+        type="button"
+        data-panel-toggle
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        title="Settings (Ctrl/⌘ + ,)"
+      >
+        Settings
+      </button>
+    </header>
+
+    <main class="split" id="main">
+      <section class="pane pane-editor" id="editor-pane" aria-label="Script">
+        <div class="float-bar" id="editor-bar">
+          <span class="grip-dots"></span>
+          <span class="float-title">Script</span>
+          <button class="win-btn" id="editor-dock" type="button" title="Dock the editor back into the split (or double-click this bar)">Dock</button>
+        </div>
+        <div class="tabrow">
+          <nav id="tabs" class="tabbar"></nav>
+          <button
+            id="editor-undock"
+            class="win-btn"
+            type="button"
+            title="Undock the editor into a floating window"
+            aria-label="Undock editor"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1 4.5V11h6.5M4 1h7v7H4z"/></svg>
+          </button>
+        </div>
+        <div id="editor"></div>
+      </section>
+      <div
+        class="gutter"
+        id="gutter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panes"
+        tabindex="0"
+      ></div>
+      <section class="pane pane-dock" id="dock" aria-label="Windows"></section>
+    </main>
+
+    <footer class="statusbar">
+      <output id="status" class="status-message"></output>
+      <span id="status-score" class="status-meta"></span>
+      <span id="status-position" class="status-meta"></span>
+    </footer>
+
+    <div id="settings-panel" class="panel" role="dialog" aria-label="Settings" hidden></div>
+    <div id="scores-panel" class="panel panel-scores" role="dialog" aria-label="Scores" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

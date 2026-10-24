@@ -1,0 +1,1407 @@
+@import "./themes.css";
+
+/*
+ * Two-pane shell. Every colour comes from the active theme's palette in
+ * themes.css (bound on <html data-theme>), so the editor, the chrome and the
+ * themed score paper switch together with no redraw. Controls and the
+ * settings panel follow typst-editor's, so the two apps feel like siblings.
+ */
+
+:root {
+  --serif: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  /* Overwritten from `settings.ts`; these are only the pre-hydration values. */
+  --editor-font: var(--mono);
+  --editor-size: 13px;
+  --editor-leading: 1.6;
+  --score-zoom: 1;
+
+  /* The undocked editor's background, from Settings → Layout. */
+  --glass-a: 1;
+  --glass-blur: 0px;
+
+  --radius: 7px;
+  --radius-lg: 12px;
+  --speed: 130ms;
+  --ease: cubic-bezier(0.2, 0, 0.13, 1);
+}
+
+/*
+ * Syntax roles, mapped onto the active theme's palette exactly once. Bound to
+ * `[data-theme]` rather than `:root` so it also resolves inside theme chips,
+ * which carry their own palette in a subtree.
+ */
+[data-theme] {
+  --tok-comment: var(--ink-faint);
+  --tok-punctuation: var(--ink-dim);
+  --tok-keyword: var(--c-magenta);
+  --tok-string: var(--c-green);
+  --tok-number: var(--c-orange);
+  --tok-function: var(--c-blue);
+  --tok-definition: var(--c-violet);
+  --tok-property: var(--c-cyan);
+  --tok-type: var(--c-yellow);
+  --tok-escape: var(--c-red);
+  --tok-error: var(--c-red);
+
+  /* The engraved page. "Paper" mode: printable cream, whatever the theme. */
+  --score-paper: #fbf9f3;
+  --score-ink: #1b1915;
+}
+
+body.paper-themed {
+  --score-paper: var(--paper);
+  --score-ink: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --speed: 1ms; }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+/* The app never scrolls as a whole, so a pull at the top of a pane must not
+   turn into pull-to-refresh and reload the editor mid-sentence. */
+html { overscroll-behavior: none; }
+
+/* Scrollbars in the theme's own colours, never a pale default track. */
+* {
+  scrollbar-color: color-mix(in srgb, var(--ink) 22%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+body {
+  /* dvh tracks the collapsing URL bar on mobile browsers; 100% is the fallback. */
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+body.resizing { user-select: none; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+[hidden] { display: none !important; }
+
+/* Controls ---------------------------------------------------------------- */
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 7px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color var(--speed) var(--ease),
+    color var(--speed) var(--ease),
+    background var(--speed) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--paper-raised));
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 84%, var(--ink));
+  border-color: transparent;
+  color: var(--paper);
+}
+
+.btn-icon {
+  padding: 7px 9px;
+  min-width: 32px;
+}
+
+.btn-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 78px;
+  justify-content: center;
+}
+
+.btn-play .play-glyph { font-size: 10px; }
+.btn-play[data-state="loading"] { cursor: progress; }
+
+/* A connected run of buttons. */
+.segmented { display: flex; }
+
+.segmented .btn {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.segmented .btn:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+  margin-left: 0;
+}
+
+.segmented .btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+
+.segmented .btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--paper-raised));
+  border-color: var(--accent);
+  color: var(--accent);
+  position: relative;
+  z-index: 1;
+}
+
+/* Toolbar ----------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: calc(9px + env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+    9px max(14px, env(safe-area-inset-left));
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-raised);
+  flex: none;
+}
+
+.wordmark {
+  font-family: var(--serif);
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  padding-right: 4px;
+  color: var(--accent);
+  user-select: none;
+}
+
+.group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.spacer { flex: 1; }
+
+
+/* Panes ------------------------------------------------------------------- */
+
+.split {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  position: relative;
+  padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+
+.split.swapped { flex-direction: row-reverse; }
+
+.pane {
+  min-width: 180px;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-editor { flex: 0 0 44%; }
+
+/* The dock: docked windows stack in it, top to bottom, sharing the height. */
+.pane-dock {
+  flex: 1 1 auto;
+  background: var(--paper-sunken);
+}
+
+/* With nothing docked, or the editor floating, the other side takes the width. */
+.split.dock-empty .pane-dock,
+.split.dock-empty .gutter,
+.split.editor-floating .gutter { display: none; }
+
+.split.dock-empty .pane-editor:not(.floating) { flex: 1 1 auto !important; }
+.split.editor-floating .pane-dock { flex: 1 1 auto; }
+
+.split.dock-empty.editor-floating::after {
+  content: "Nothing docked — dock a window or the editor from its bar";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 10.5px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.gutter {
+  flex: 0 0 1px;
+  background: var(--rule);
+  cursor: col-resize;
+  position: relative;
+  /* Dragging the divider must not scroll the page on touch screens. */
+  touch-action: none;
+}
+
+/* A hairline is correct visually but impossible to grab, so the hit area is
+   wider than what is drawn. */
+.gutter::after {
+  content: "";
+  position: absolute;
+  inset: 0 -5px;
+  z-index: 2;
+}
+
+.gutter:hover, .gutter.dragging, .gutter:focus-visible { background: var(--accent); }
+
+.tabrow {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-sunken);
+}
+
+.tabrow .tabbar { flex: 1 1 auto; min-width: 0; border-bottom: none; }
+.tabrow > .win-btn { align-self: center; margin: 0 6px 0 2px; }
+.pane-editor.floating #editor-undock { display: none; }
+
+#editor { flex: 1 1 auto; min-height: 0; }
+
+/* Glass: the undocked editor's backgrounds go see-through (Settings → Layout).
+   Text and the tab strip's rule stay; only the surfaces fade. */
+.pane-editor.floating.glass {
+  background: color-mix(in srgb, var(--paper) calc(var(--glass-a) * 100%), transparent);
+}
+
+.pane-editor.floating.glass-frost {
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+
+.pane-editor.floating.glass > .float-bar,
+.pane-editor.floating.glass .tabrow,
+.pane-editor.floating.glass .tabbar,
+.pane-editor.floating.glass .tab.active,
+.pane-editor.floating.glass .cm-editor,
+.pane-editor.floating.glass .cm-editor .cm-gutters,
+.pane-editor.floating.glass .cm-editor .cm-panels,
+.pane-editor.floating.glass .cm-editor .cm-vim-panel {
+  background: transparent;
+}
+
+.pane-editor.floating.glass .cm-editor .cm-activeLine,
+.pane-editor.floating.glass .cm-editor .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+/* Windows ----------------------------------------------------------------- */
+/* One kind of window for everything beside the editor: a bar (what it shows,
+   dock/undock, close) over a body. Docked, it stacks in the dock pane;
+   floating, it is a fixed box on <body> with inline left/top/width/height. */
+
+.win {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.win.docked { flex: 1 1 0; }
+.win.docked + .win.docked { border-top: 1px solid var(--rule); }
+
+.floating {
+  position: fixed;
+  z-index: 50;
+  flex: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 34px rgb(0 0 0 / 0.28);
+  overflow: hidden;
+}
+
+.floating.moving { box-shadow: 0 18px 54px rgb(0 0 0 / 0.4); }
+.floating:not(.moving) { transition: box-shadow var(--speed) var(--ease); }
+
+/* Only a fresh undock pops in; a restored one on page load appears in place. */
+.floating.pop { animation: float-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+@keyframes float-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+.win-bar,
+.float-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;              /* BAR_H in windows.ts */
+  padding: 0 6px 0 10px;
+  background: var(--paper-sunken);
+  border-bottom: 1px solid var(--rule);
+  font: 10.5px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  touch-action: none;
+  user-select: none;
+}
+
+.float-bar { display: none; }
+.pane-editor.floating > .float-bar { display: flex; cursor: grab; }
+.win.floating > .win-bar { cursor: grab; }
+.floating.moving > .win-bar, .floating.moving > .float-bar { cursor: grabbing; }
+
+.grip-dots {
+  flex: none;
+  width: 14px;
+  height: 10px;
+  background: radial-gradient(circle, var(--ink-faint) 1px, transparent 1.2px) 0 0 / 5px 5px;
+  opacity: 0.7;
+}
+
+.win.docked .grip-dots { display: none; }
+.float-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.win-bar .spacer { margin-left: auto; }
+
+.win-select {
+  width: auto;
+  padding: 1px 4px;
+  font: 11.5px var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  background: transparent;
+  color: var(--ink);
+  border-color: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.win-select:hover { border-color: var(--rule); background: var(--paper-raised); }
+
+.win-btn {
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--ink-dim);
+  font: 11px var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.win-btn:hover:not(:disabled) { color: var(--ink); background: var(--paper-raised); border-color: var(--rule); }
+.win-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* A score window's controls: one toggle unfolds a zoom strip sideways. */
+.win-tools { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.win-strip { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.win-strip-body { display: flex; align-items: center; gap: 6px; }
+.win-strip-body[hidden] { display: none; }
+.win-seg { display: flex; align-items: center; }
+.win-seg .win-btn { padding: 0 5px; border-radius: 0; }
+.win-seg .win-btn:first-child { border-radius: 4px 0 0 4px; }
+.win-seg .win-btn:last-child { border-radius: 0 4px 4px 0; }
+.win-tools .win-btn.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.win-readout { font: 10.5px var(--mono); color: var(--ink-faint); min-width: 4ch; padding: 0 3px; letter-spacing: 0; }
+.win-strip-toggle.active { color: var(--ink); }
+
+.win-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Resize handles: invisible, generous hit areas inside the floating box. */
+.fh { display: none; }
+/* Above CodeMirror's panels (vim status line, search: 300), which would otherwise cover the bottom edge. */
+.floating > .fh { display: block; position: absolute; z-index: 310; touch-action: none; }
+.fh-n  { top: 0;    left: 8px;  right: 8px;   height: 8px; cursor: ns-resize; }
+.fh-s  { bottom: 0; left: 8px;  right: 8px;   height: 8px; cursor: ns-resize; }
+.fh-w  { left: 0;   top: 8px;   bottom: 8px;  width: 8px;  cursor: ew-resize; }
+.fh-e  { right: 0;  top: 8px;   bottom: 8px;  width: 8px;  cursor: ew-resize; }
+.fh-nw { top: 0;    left: 0;   width: 14px; height: 14px; cursor: nwse-resize; }
+.fh-se { bottom: 0; right: 0;  width: 14px; height: 14px; cursor: nwse-resize; }
+.fh-ne { top: 0;    right: 0;  width: 14px; height: 14px; cursor: nesw-resize; }
+.fh-sw { bottom: 0; left: 0;   width: 14px; height: 14px; cursor: nesw-resize; }
+
+/* A small visible grip in the bottom-right so the affordance is discoverable. */
+.fh-se::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--ink-faint);
+  border-bottom: 2px solid var(--ink-faint);
+  border-radius: 0 0 2px 0;
+  opacity: 0.6;
+}
+
+.floating:hover .fh-se::after { opacity: 1; }
+
+/* Snap guides: a line where a dragged window edge has stuck. */
+.snap-guide { display: none; position: fixed; z-index: 48; background: var(--accent); opacity: 0.6; pointer-events: none; }
+.snap-guide.snap-x { top: 0; bottom: 0; width: 1px; }
+.snap-guide.snap-y { left: 0; right: 0; height: 1px; }
+
+/* The score, inside a window: a scrolling sheet of paper. */
+.score-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--score-paper);
+  color: var(--score-ink);
+  transition: background var(--speed) var(--ease);
+}
+
+body.paper-dimmed .score-scroll { filter: brightness(0.78) sepia(0.12); }
+
+/* The console: what the script printed on its last run. */
+.console {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  font: 12px / 1.5 var(--editor-font);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.console-line { padding: 1px 0; }
+.console-line + .console-line { border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent); }
+.console-line[data-level="warn"] { color: var(--c-yellow); }
+.console-line[data-level="error"] { color: var(--c-red); }
+.console-line[data-level="debug"], .console-line[data-level="info"] { color: var(--ink-dim); }
+.console-empty { color: var(--ink-faint); font-style: italic; }
+
+/* The reference: the api and the shortcuts. */
+.reference {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 14px 20px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.reference h3 {
+  margin: 12px 0 6px;
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.reference h3:first-child { margin-top: 2px; }
+.reference p { margin: 6px 0; color: var(--ink-dim); }
+.reference code { font: 11.5px var(--editor-font); color: var(--ink); background: var(--paper-sunken); padding: 1px 4px; border-radius: 3px; }
+.reference table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; }
+.reference th { text-align: left; vertical-align: top; font: 11.5px var(--editor-font); color: var(--accent); padding: 3px 10px 3px 0; white-space: nowrap; }
+.reference td { vertical-align: top; padding: 3px 0; color: var(--ink-dim); }
+.reference tr + tr th, .reference tr + tr td { border-top: 1px solid var(--rule); }
+
+/* Tabs -------------------------------------------------------------------- */
+
+.tabbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-sunken);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tabbar::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  position: relative;
+  margin-top: 4px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  color: var(--ink-dim);
+  transition: color var(--speed) var(--ease), background var(--speed) var(--ease);
+}
+
+.tab:hover { color: var(--ink); }
+
+.tab.active {
+  background: var(--paper);
+  border-color: var(--rule);
+  color: var(--ink);
+  /* Cover the strip's bottom rule so the tab joins the editor below. */
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+}
+
+.tab.active::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto;
+  height: 2px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--accent);
+}
+
+.tab-label,
+.tab-close,
+.tab-add {
+  font: 12px var(--mono);
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tab-label {
+  padding: 7px 10px 7px 12px;
+  white-space: nowrap;
+}
+
+.tab:not(:has(.tab-close)) .tab-label { padding-right: 12px; }
+
+.tab.has-error .tab-label::after {
+  content: "●";
+  margin-left: 6px;
+  font-size: 9px;
+  color: var(--c-red);
+  vertical-align: 1px;
+}
+
+.tab-close {
+  padding: 4px 8px 4px 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ink-faint);
+  opacity: 0;
+  transition: opacity var(--speed) var(--ease), color var(--speed) var(--ease);
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close,
+.tab-close:focus-visible { opacity: 1; }
+
+.tab-close:hover { color: var(--c-red); }
+
+.tab-add {
+  flex: none;
+  align-self: center;
+  margin: 4px 0 0 2px;
+  padding: 4px 9px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-faint);
+  border-radius: var(--radius);
+}
+
+.tab-add:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.tab-rename {
+  font: 12px var(--mono);
+  margin: 4px 4px 4px 8px;
+  padding: 2px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  outline: none;
+}
+
+/* Touch: no hover, so close buttons stay visible and targets grow. */
+@media (pointer: coarse) {
+  .tab-close { opacity: 1; padding: 8px 10px 8px 4px; }
+  .tab-label { padding-block: 10px; }
+}
+
+.score-page {
+  padding: 18px 12px 40px;
+  min-height: 100%;
+  zoom: var(--score-zoom);
+}
+
+.score-page svg { display: block; }
+
+/* Currently sounding note during playback. The !important beats the inline
+   fill/stroke the renderer's ink pass writes onto every element. Stroke is only
+   recoloured where one already exists, so fill-only glyphs gain no outline. */
+.score-page svg .playing:not([fill='none']),
+.score-page svg .playing [fill]:not([fill='none']) {
+  fill: var(--accent) !important;
+}
+
+.score-page svg .playing [stroke]:not([stroke='none']),
+.score-page svg g[stroke]:not([stroke='none']).playing {
+  stroke: var(--accent) !important;
+}
+
+.score-heading {
+  margin: 0 0 10px 26px;
+  font-family: var(--serif);
+}
+
+.score-heading h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.score-heading p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.score-empty {
+  margin: 40px 26px;
+  font-family: var(--serif);
+  font-style: italic;
+  opacity: 0.55;
+}
+
+/* Footer ------------------------------------------------------------------ */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 max(14px, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+    max(14px, env(safe-area-inset-left));
+  height: calc(28px + env(safe-area-inset-bottom));
+  flex: none;
+  overflow: hidden;
+  border-top: 1px solid var(--rule);
+  background: var(--paper-raised);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-message[data-kind="error"] { color: var(--c-red); }
+.status-message[data-kind="warning"] { color: var(--c-yellow); }
+.status-message[data-kind="working"] { color: var(--ink-faint); }
+.status-message[data-kind="ok"]::before { content: "● "; color: var(--c-green); }
+
+.status-meta {
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* Scores button and panel -------------------------------------------------- */
+
+.btn-scores {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+}
+
+.btn-scores #scores-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-scores.dirty #scores-name::after { content: " •"; color: var(--accent); }
+.btn-scores .caret { font-size: 10px; color: var(--ink-faint); }
+
+.panel-scores { left: 14px; right: auto; }
+
+.field-state {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+}
+
+.name-input {
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+
+.name-input:focus { outline: none; border-color: var(--accent); }
+
+.score-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.score-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.score-row:hover { background: var(--paper); border-color: var(--rule); }
+.score-row.current { border-color: var(--accent); }
+.sr-main { flex: 1; min-width: 0; }
+.sr-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sr-meta { font: 11px var(--mono); color: var(--ink-faint); margin-top: 2px; }
+.sr-actions { display: flex; gap: 2px; opacity: 0; transition: opacity var(--speed) var(--ease); }
+.score-row:hover .sr-actions, .score-row:focus-within .sr-actions { opacity: 1; }
+
+.sr-btn {
+  font: 13px var(--sans);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.sr-btn:hover { color: var(--ink); background: var(--paper-raised); border-color: var(--rule); }
+.sr-btn.sr-danger:hover { color: var(--c-red); }
+
+@media (pointer: coarse) { .sr-actions { opacity: 1; } }
+
+/* Settings panel ---------------------------------------------------------- */
+
+.panel {
+  position: fixed;
+  top: calc(52px + env(safe-area-inset-top));
+  right: 14px;
+  width: 350px;
+  max-height: calc(100vh - 92px);
+  max-height: calc(100dvh - 92px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Above CodeMirror's own panels (vim status line, search), which sit at 300. */
+  z-index: 400;
+  padding: 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--paper-raised);
+  box-shadow: 0 10px 34px rgb(0 0 0 / 0.22);
+  animation: panel-in var(--speed) var(--ease);
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+}
+
+.panel-title {
+  font-family: var(--serif);
+  font-size: 19px;
+  margin: 0 0 14px;
+  font-weight: 400;
+}
+
+.field { margin-bottom: 18px; }
+.field:last-child { margin-bottom: 0; }
+
+.field-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 7px;
+}
+
+.field-note {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
+select {
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+select.select-inline {
+  width: auto;
+  padding: 5px 8px;
+}
+
+.inline {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline select { flex: 1; min-width: 0; }
+.inline-end { margin-top: 10px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* The theme picker folds behind a summary line showing the theme in use. */
+.theme-picker > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius);
+}
+
+.theme-picker > summary::-webkit-details-marker { display: none; }
+.theme-picker > summary .field-label { margin-bottom: 0; }
+
+.theme-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.theme-current::after {
+  content: "▸";
+  font-size: 11px;
+  color: var(--ink-faint);
+  transition: transform var(--speed) var(--ease);
+}
+
+.theme-picker[open] .theme-current::after { transform: rotate(90deg); }
+.theme-picker > summary:hover .theme-current { color: var(--accent); }
+.theme-picker[open] > summary { margin-bottom: 10px; }
+
+.theme-swatch {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.theme-swatch > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+
+.rack-label {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin: 12px 0 6px;
+}
+
+/* The theme rack: each chip is a sheet of that theme's paper, showing its ink,
+   accent and a few of its hues rather than naming colours in the abstract. */
+.rack {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.chip {
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  font: inherit;
+  transition:
+    border-color var(--speed) var(--ease),
+    transform var(--speed) var(--ease);
+}
+
+.chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.chip-face {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 1;
+  padding: 8px 9px 6px;
+  color: var(--ink);
+}
+
+.chip-dots { display: flex; gap: 3px; }
+
+.chip-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.chip-rule {
+  display: block;
+  height: 4px;
+  background: var(--accent);
+}
+
+.chip-name {
+  display: block;
+  font-size: 10.5px;
+  padding: 5px 6px;
+  color: var(--ink-dim);
+  background: var(--paper-raised);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip[aria-pressed="true"] .chip-name { color: var(--accent); }
+
+/* A row with a label on the left and a control on the right. */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.row + .row { border-top: 1px solid var(--rule); }
+
+.row-label { font-size: 13px; }
+
+.row .segmented .btn { padding: 6px 10px; font-size: 12.5px; }
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.stepper-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 5ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.slider {
+  width: 120px;
+  accent-color: var(--accent);
+}
+
+/* An accessible switch built on a real checkbox. */
+.switch {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 11px;
+  background: var(--rule);
+  transition: background var(--speed) var(--ease);
+  pointer-events: none;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--paper-raised);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  transition: transform var(--speed) var(--ease);
+}
+
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track::after { transform: translateX(17px); }
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Editor -----------------------------------------------------------------
+ *
+ * CodeMirror ships a light base theme, and any surface left unstyled shows
+ * through as a pale patch on a dark theme — the lint gutter and the search
+ * panel are the usual offenders. Every surface it can paint is named here.
+ */
+
+.cm-editor {
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--editor-size);
+}
+
+.cm-editor .cm-scroller {
+  font-family: var(--editor-font);
+  line-height: var(--editor-leading);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.cm-editor.cm-focused { outline: none; }
+
+.cm-editor .cm-content {
+  caret-color: var(--accent);
+  padding: 10px 0;
+}
+
+.cm-editor .cm-gutters {
+  background: var(--paper);
+  color: var(--ink-faint);
+  border-right: 1px solid var(--rule);
+}
+
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 10px 0 14px;
+  min-width: 3ch;
+}
+
+.cm-editor .cm-foldGutter .cm-gutterElement { padding: 0 4px; color: var(--ink-faint); }
+.cm-editor .cm-gutter-lint { width: 14px; }
+.cm-editor .cm-gutter-lint .cm-gutterElement { padding: 0; }
+
+.cm-editor .cm-activeLine { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+
+.cm-editor .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--ink-dim);
+}
+
+.cm-editor .cm-cursor,
+.cm-editor .cm-dropCursor {
+  border-left-color: var(--accent);
+  border-left-width: 2px;
+}
+
+.cm-editor .cm-selectionBackground,
+.cm-editor .cm-content ::selection,
+.cm-editor.cm-focused .cm-selectionBackground {
+  background: var(--selection);
+}
+
+.cm-editor .cm-selectionMatch { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.cm-editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--c-yellow) 30%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--c-yellow) 60%, transparent);
+}
+
+.cm-editor .cm-searchMatch-selected { background: color-mix(in srgb, var(--c-orange) 45%, transparent); }
+
+.cm-editor .cm-matchingBracket,
+.cm-editor .cm-nonmatchingBracket {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: none;
+}
+
+.cm-editor .cm-panels,
+.cm-editor .cm-panel {
+  background: var(--paper-raised);
+  color: var(--ink);
+  border-color: var(--rule);
+}
+
+.cm-editor .cm-panel input,
+.cm-editor .cm-panel button {
+  font-family: var(--sans);
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+/* Vim mode's status line, which otherwise arrives with browser defaults. */
+.cm-editor .cm-vim-panel {
+  background: var(--paper-raised);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-top: 1px solid var(--rule);
+}
+
+.cm-editor .cm-vim-panel input {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  outline: none;
+  width: 100%;
+}
+
+.cm-editor .cm-fat-cursor {
+  background: var(--accent) !important;
+  color: var(--paper) !important;
+}
+
+.cm-editor:not(.cm-focused) .cm-fat-cursor {
+  background: none !important;
+  outline: 1px solid var(--accent) !important;
+}
+
+.cm-tooltip {
+  background: var(--paper-raised);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.24);
+}
+
+.cm-tooltip-autocomplete { overflow: hidden; }
+
+.cm-tooltip-autocomplete > ul {
+  font-family: var(--editor-font);
+  font-size: 13px;
+  max-height: 17em;
+}
+
+.cm-tooltip-autocomplete > ul > li {
+  padding: 3px 10px;
+  color: var(--ink);
+}
+
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--ink);
+}
+
+.cm-completionMatchedText {
+  text-decoration: none;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.cm-completionDetail {
+  margin-left: 1em;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.cm-tooltip.cm-completionInfo {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  max-width: 44ch;
+  padding: 9px 11px;
+}
+
+.cm-tooltip .cm-diagnostic {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  padding: 7px 9px;
+  border-left-width: 3px;
+}
+
+.cm-tooltip .cm-diagnostic-error { border-left-color: var(--c-red); }
+.cm-tooltip .cm-diagnostic-warning { border-left-color: var(--c-yellow); }
+
+.cm-editor .cm-lintRange-error {
+  background: none;
+  text-decoration: underline wavy var(--c-red);
+  text-underline-offset: 3px;
+}
+
+.cm-editor .cm-lintRange-warning {
+  background: none;
+  text-decoration: underline wavy var(--c-yellow);
+  text-underline-offset: 3px;
+}
+
+/* Narrow screens: stack the panes ----------------------------------------- */
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  /* Everything docks (windows.ts mirrors this query); the editor stays on top. */
+  .split, .split.swapped { flex-direction: column; }
+  #editor-undock { display: none; }
+
+  .pane { min-width: 0; min-height: 120px; }
+  .pane-editor { flex: 0 0 45%; }
+
+  .gutter {
+    flex-basis: 22px;       /* finger-sized grab area... */
+    cursor: row-resize;
+    background: transparent;
+  }
+
+  .gutter::after { inset: 0; }
+
+  .gutter::before {         /* ...drawn as a slim handle */
+    content: "";
+    position: absolute;
+    inset: 9px 30%;
+    background: var(--rule);
+    border-radius: 2px;
+  }
+
+  .gutter:hover, .gutter.dragging, .gutter:focus-visible { background: transparent; }
+  .gutter:hover::before, .gutter.dragging::before { background: var(--accent); }
+
+  .toolbar {
+    gap: 6px;
+    padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right));
+  }
+
+  .wordmark { display: none; }
+  #new-window { display: none; }
+  .btn-scores { max-width: 110px; }
+
+  .statusbar { gap: 10px; }
+  #status-position { display: none; }
+
+  .panel {
+    left: 10px;
+    right: 10px;
+    width: auto;
+  }
+}
+
+/* Touch screens: finger-sized targets, and no text field under 16px. ----- */
+
+@media (pointer: coarse) {
+  button { touch-action: manipulation; }
+  .btn { min-height: 40px; }
+  .btn-icon { min-width: 40px; }
+
+  select,
+  .cm-editor .cm-panel input,
+  .cm-editor .cm-vim-panel input {
+    font-size: 16px;
+  }
+
+  select { min-height: 40px; }
+  .row { padding: 9px 0; }
+  .win-btn { min-width: 36px; min-height: 32px; justify-content: center; }
+  .tab-add { min-width: 40px; min-height: 36px; }
+
+  /* The switch keeps its size; its checkbox reaches past it to take the tap. */
+  .switch input { inset: -10px -8px; }
+}
+
+/* Print: score only, black on white --------------------------------------- */
+
+@media print {
+  .toolbar, .statusbar, .panel, .pane-editor, .gutter, .win-bar, .fh, .snap-guide,
+  .win:not([data-theme]):not([data-kind="score"]) { display: none !important; }
+
+  body, .pane-dock, .win, .score-scroll {
+    background: #fff !important;
+    color: #111 !important;
+    filter: none !important;
+    overflow: visible;
+    height: auto;
+  }
+
+  .split, .win { display: block; }
+  .win.floating { position: static; border: none; box-shadow: none; width: auto !important; height: auto !important; }
+  .score-page { padding: 0; zoom: 1; }
+}
